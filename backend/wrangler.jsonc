@@ -1,0 +1,12 @@
+{
+  "name": "packlight-ai",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-25",
+  "workers_dev": true,
+  "observability": { "enabled": false },
+  "ratelimits": [{
+    "name": "RATE_LIMITER",
+    "namespace_id": "10487",
+    "simple": { "limit": 4, "period": 60 }
+  }]
+}

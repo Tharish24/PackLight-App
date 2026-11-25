@@ -12,20 +12,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.Normalizer
 import java.time.Instant
 
 data class Weather(val temperature: Double, val code: Int, val observed: String, val fetched: String)
 data class ChatMessage(val text: String, val user: Boolean)
-object ContentPolicy {
-    private val prohibited = Regex("\\b(fuck\\w*|shit\\w*|bitch\\w*|asshole\\w*|nigger\\w*|faggot\\w*|porn\\w*|rape\\w*|suicid\\w*|self.?harm|kill\\w*|murder\\w*|bomb\\w*|weapon\\w*|terror\\w*|cocaine|heroin|methamphetamine|hate|nazi\\w*)\\b")
-    fun allowed(text: String): Boolean {
-        val normalized = Normalizer.normalize(text, Normalizer.Form.NFKC).lowercase()
-            .replace('0', 'o').replace('1', 'i').replace('3', 'e').replace('4', 'a').replace('@', 'a').replace('$', 's')
-        return text.length in 1..2000 && !prohibited.containsMatchIn(normalized) &&
-            !prohibited.containsMatchIn(normalized.replace(Regex("[^a-z ]"), ""))
-    }
-}
 class TravelViewModel(app: Application) : AndroidViewModel(app) {
     private val repository = TravelRepository(app)
     val state = MutableStateFlow(TravelState())
@@ -33,10 +23,21 @@ class TravelViewModel(app: Application) : AndroidViewModel(app) {
     val error = MutableStateFlow<String?>(null)
     val weather = MutableStateFlow<Map<String, Weather>>(emptyMap())
     val weatherStatus = MutableStateFlow<Map<String, String>>(emptyMap())
-    private val _messages = MutableStateFlow(listOf(ChatMessage("Hello, traveler. Search for any country above, or name it in your question. Offline mode offers general travel help and four featured city guides.", false)))
+    private val _messages = MutableStateFlow(listOf(ChatMessage("Hello, traveler. Choose any country or name it in your question. Ask for travel tips, packing advice, food, culture or an itinerary.", false)))
     val messages: StateFlow<List<ChatMessage>> = _messages
     val thinking = MutableStateFlow(false)
+    val canRetry = MutableStateFlow(false)
+    private var failedQuestion: Pair<String, String>? = null
+    fun retryLastQuestion() {
+        failedQuestion?.let { askInternal(it.first, it.second, false) }
+    }
     init {
+        viewModelScope.launch {
+            // Remove the retired per-user credential without sending it anywhere.
+            withContext(Dispatchers.IO) {
+                android.util.AtomicFile(java.io.File(app.noBackupFilesDir, "openrouter-key.enc")).delete()
+            }
+        }
         viewModelScope.launch {
             try { repository.state.collect { state.value = it; ready.value = true } }
             catch (_: Exception) { error.value = "Saved data could not be read. Please restart the app. No data has been overwritten." }
@@ -67,13 +68,11 @@ class TravelViewModel(app: Application) : AndroidViewModel(app) {
             catch (_: Exception) { weatherStatus.value = weatherStatus.value + (destination.city to "Weather unavailable. Check your connection and retry. Previous readings may be stale.") }
         }
     }
-    fun ask(prompt: String, city: String) {
+    fun ask(prompt: String, city: String) = askInternal(prompt, city, true)
+    private fun askInternal(prompt: String, city: String, appendUser: Boolean) {
         if (thinking.value || prompt.isBlank()) return
-        if (!ContentPolicy.allowed(prompt)) {
-            _messages.value += ChatMessage("Please keep requests respectful and travel-related. I cannot help with harmful, hateful, explicit or offensive content.", false)
-            return
-        }
-        _messages.value += ChatMessage(prompt, true)
+        if (appendUser) _messages.value += ChatMessage(prompt, true)
+        canRetry.value = false
         thinking.value = true
         viewModelScope.launch {
             try {
@@ -81,13 +80,21 @@ class TravelViewModel(app: Application) : AndroidViewModel(app) {
                     require(BuildConfig.AI_URL.startsWith("https://"))
                     val destinationName = mentionedCountry(prompt)?.name ?: city
                     val response = JSONObject(request(BuildConfig.AI_URL, JSONObject().put("message", prompt).put("destination", destinationName).toString()))
-                    // Server must moderate input and output before returning safe=true.
-                    if (!response.optBoolean("safe", false)) "This request or response was blocked by the safety filter."
-                    else response.getString("reply").let { if (ContentPolicy.allowed(it)) it else "The response was blocked by the language filter." }
+                    response.getString("reply").also {
+                        if (it.isBlank()) throw AiConnectionException("The AI provider returned an empty answer. Tap Retry.")
+                    }
                 }
                 _messages.value += ChatMessage(answer, false)
+                failedQuestion = null
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { _messages.value += ChatMessage("The AI service is unavailable. Please try again. Offline guide: " + offlineAnswer(prompt, city), false) }
+            catch (e: AiConnectionException) {
+                _messages.value += ChatMessage(e.message ?: assistantError(503, ""), false)
+                failedQuestion = prompt to city; canRetry.value = true
+            }
+            catch (_: Exception) {
+                _messages.value += ChatMessage("Could not reach the travel assistant. Check your internet connection, then tap Retry.", false)
+                failedQuestion = prompt to city; canRetry.value = true
+            }
             finally { thinking.value = false }
         }
     }
@@ -114,14 +121,20 @@ class TravelViewModel(app: Application) : AndroidViewModel(app) {
 private fun request(address: String, body: String? = null): String {
     val connection = URL(address).openConnection() as HttpURLConnection
     try {
-        connection.connectTimeout = 12000; connection.readTimeout = 65000
+        connection.connectTimeout = 12000; connection.readTimeout = if (body != null) 90000 else 15000
         connection.instanceFollowRedirects = false
         if (body != null) {
             connection.requestMethod = "POST"; connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
         }
-        check(connection.responseCode in 200..299)
+        if (connection.responseCode !in 200..299) {
+            val code = runCatching {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText().take(4096) } ?: "{}"
+                JSONObject(errorBody).optString("code")
+            }.getOrDefault("")
+            throw AiConnectionException(assistantError(connection.responseCode, code))
+        }
         return connection.inputStream.bufferedReader().use { it.readText().also { text -> check(text.length <= 100000) } }
     } finally { connection.disconnect() }
 }

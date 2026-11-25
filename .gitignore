@@ -15,6 +15,11 @@ local.properties
 *.aab
 PackLight*-source.zip
 
+# Worker development state
+.wrangler/
+node_modules/
+.dev.vars*
+
 # Credentials and signing material
 .env
 .env.*

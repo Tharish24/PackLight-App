@@ -325,13 +325,14 @@ private fun AssistantScreen(vm: TravelViewModel) {
     var prompt by rememberSaveable { mutableStateOf("") }
     val messages by vm.messages.collectAsStateWithLifecycle()
     val thinking by vm.thinking.collectAsStateWithLifecycle()
+    val canRetry by vm.canRetry.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-        Heading("Your travel companion", "A little local insight.", if (BuildConfig.AI_URL.isBlank()) "Offline guide mode · AI backend not configured" else "AI mode · messages sent to your configured service")
+        Heading("Your travel companion", "A little local insight.", if (BuildConfig.AI_URL.isBlank()) "Offline travel helper" else "PackLight AI travel assistant")
         CountrySearchField(countryName, { countryName = it })
         Text(if (country == null) "Choose a country suggestion, or name a country in your question." else "Destination: ${country.name}", style = MaterialTheme.typography.bodySmall)
-        Text("Respectful travel questions only. Harmful and offensive content is restricted. Never share passwords or sensitive documents.", style = MaterialTheme.typography.bodySmall)
+        Text("Travel questions only. Online questions are processed by our AI provider and may be logged. Do not share personal or confidential information.", style = MaterialTheme.typography.bodySmall)
         LazyColumn(Modifier.weight(1f), reverseLayout = true, contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (thinking) item { Text("Thinking…", color = MaterialTheme.colorScheme.primary) }
+            if (thinking) item { Text("Finding travel advice… This can take about a minute.", color = MaterialTheme.colorScheme.primary) }
             items(messages.asReversed()) { message ->
                 Card(colors = CardDefaults.cardColors(containerColor = if (message.user) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -341,6 +342,7 @@ private fun AssistantScreen(vm: TravelViewModel) {
                 }
             }
         }
+        if (canRetry) TextButton(onClick = vm::retryLastQuestion, enabled = !thinking) { Text("Retry last question") }
         OutlinedTextField(prompt, { prompt = it.take(2000) }, Modifier.fillMaxWidth().padding(bottom = 12.dp), label = { Text("Ask a travel question") },
             maxLines = 4, trailingIcon = { IconButton(enabled = !thinking && prompt.isNotBlank() && (country != null || mentionedCountry(prompt) != null), onClick = { val target = mentionedCountry(prompt) ?: country; if (target != null) { countryName = target.name; vm.ask(prompt.trim(), target.name); prompt = "" } }) { Icon(Icons.Default.Send, "Send question") } })
     }
