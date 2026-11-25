@@ -1,0 +1,1 @@
+Could not serialize C:/Users/nbtha/AndroidStudioProjects/ANDROIDPACKAPP/gradlew.bat of mime type application/x-batch

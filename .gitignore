@@ -1,0 +1,25 @@
+# Android Studio and machine-local settings
+*.iml
+.idea/
+local.properties
+.DS_Store
+/captures/
+
+# Generated output and caches
+.gradle/
+.kotlin/
+**/build/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+PackLight*-source.zip
+
+# Credentials and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+secrets.properties
